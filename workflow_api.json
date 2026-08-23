@@ -2,14 +2,23 @@
   "1": {
     "class_type": "UnetLoaderGGUF",
     "inputs": {
-      "unet_name": "Qwen-Image-Edit-2509-Q4_K_S.gguf"
+      "unet_name": "Qwen-Image-Edit-2509-Q2_K.gguf"
     },
     "_meta": { "title": "Load Diffusion Model" }
+  },
+  "14": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": ["1", 0],
+      "lora_name": "Qwen-Image-Edit-Lightning-8steps-V1.0-bf16.safetensors",
+      "strength_model": 1.0
+    },
+    "_meta": { "title": "Lightning 8-step LoRA" }
   },
   "2": {
     "class_type": "ModelSamplingAuraFlow",
     "inputs": {
-      "model": ["1", 0],
+      "model": ["14", 0],
       "shift": 3.0
     },
     "_meta": { "title": "Model Sampling" }
@@ -85,8 +94,8 @@
     "inputs": {
       "model": ["2", 0],
       "seed": 0,
-      "steps": 20,
-      "cfg": 2.5,
+      "steps": 8,
+      "cfg": 1.0,
       "sampler_name": "euler",
       "scheduler": "simple",
       "positive": ["9", 0],
