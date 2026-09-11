@@ -36,6 +36,7 @@ type TryOn struct {
 
 // Register навешивает маршруты на роутер.
 func (h *TryOn) Register(r gin.IRoutes) {
+	r.GET("/", h.index)
 	r.GET("/healthz", h.health)
 	r.POST("/tryon", h.handle)
 }

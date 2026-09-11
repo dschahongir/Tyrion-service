@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Try-On</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1e222b;
+    --border: #2a2f3a;
+    --text: #e6e9ef;
+    --muted: #9aa3b2;
+    --accent: #6d8cff;
+    --accent-press: #5678ff;
+    --danger: #ff6d6d;
+    --ok: #4ade80;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 32px 20px 64px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+  h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .status { font-size: 12.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.ok { background: var(--ok); }
+  .dot.bad { background: var(--danger); }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+
+  .drop {
+    position: relative; border: 1.5px dashed var(--border); border-radius: 12px;
+    aspect-ratio: 3 / 4; display: flex; align-items: center; justify-content: center;
+    text-align: center; color: var(--muted); cursor: pointer; overflow: hidden;
+    background: var(--panel-2); transition: border-color .15s, background .15s;
+  }
+  .drop:hover { border-color: var(--accent); }
+  .drop.drag { border-color: var(--accent); background: #202636; }
+  .drop.filled { border-style: solid; color: transparent; }
+  .drop input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .drop .hint { padding: 16px; font-size: 13px; pointer-events: none; }
+  .drop .hint b { color: var(--text); display: block; margin-bottom: 4px; font-weight: 600; }
+  .drop img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .clear {
+    position: absolute; top: 8px; right: 8px; z-index: 2; border: none; cursor: pointer;
+    background: rgba(0,0,0,.6); color: #fff; width: 26px; height: 26px; border-radius: 50%;
+    font-size: 15px; line-height: 1; display: none;
+  }
+  .drop.filled .clear { display: block; }
+
+  label.field { display: block; margin-top: 16px; }
+  label.field span { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
+  textarea, input[type=text] {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 10px; padding: 10px 12px; font: inherit; resize: vertical;
+  }
+  textarea:focus, input[type=text]:focus { outline: none; border-color: var(--accent); }
+
+  .actions { display: flex; align-items: center; gap: 14px; margin-top: 20px; }
+  button.go {
+    background: var(--accent); color: #0b0e14; border: none; font: inherit; font-weight: 600;
+    padding: 12px 24px; border-radius: 10px; cursor: pointer; transition: background .15s;
+  }
+  button.go:hover { background: var(--accent-press); }
+  button.go:disabled { opacity: .5; cursor: not-allowed; }
+  .elapsed { color: var(--muted); font-size: 13px; }
+
+  .result { margin-top: 24px; }
+  .result .card { min-height: 120px; }
+  .placeholder { color: var(--muted); font-size: 14px; text-align: center; padding: 40px 0; }
+  .result img { max-width: 100%; border-radius: 10px; display: block; }
+  .result .bar { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; gap: 12px; flex-wrap: wrap; }
+  a.download { color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600; }
+  a.download:hover { text-decoration: underline; }
+  .err { color: var(--danger); font-size: 13.5px; white-space: pre-wrap; word-break: break-word; }
+  .spinner {
+    width: 22px; height: 22px; border: 2.5px solid var(--border); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin .8s linear infinite; display: inline-block; vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Virtual Try-On</h1>
+      <div class="sub">Upload a photo of yourself and a garment, then generate the try-on.</div>
+    </div>
+    <div class="status" id="status"><span class="dot" id="statusDot"></span><span id="statusText">checking backend…</span></div>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Your photo</h2>
+      <div class="drop" id="personDrop">
+        <button class="clear" type="button" data-for="person" title="Remove">&times;</button>
+        <div class="hint"><b>Drop a full-body photo</b>or click to choose</div>
+        <input type="file" id="person" accept="image/*">
+      </div>
+    </div>
+    <div class="card">
+      <h2>Garment</h2>
+      <div class="drop" id="garmentDrop">
+        <button class="clear" type="button" data-for="garment" title="Remove">&times;</button>
+        <div class="hint"><b>Drop the clothing item</b>or click to choose</div>
+        <input type="file" id="garment" accept="image/*">
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px;">
+    <h2>Instructions</h2>
+    <label class="field">
+      <span>Prompt — describe what to do (leave blank for the default clothing swap)</span>
+      <textarea id="prompt" rows="3" placeholder="Replace the clothing worn by the person in image 1 with the garment shown in image 2. Keep the person's face, pose, body shape and background identical."></textarea>
+    </label>
+    <label class="field">
+      <span>Negative prompt (optional) — what to avoid</span>
+      <input type="text" id="negative" placeholder="e.g. blurry, distorted, extra limbs">
+    </label>
+    <div class="actions">
+      <button class="go" id="go">Generate try-on</button>
+      <span class="elapsed" id="elapsed"></span>
+    </div>
+  </div>
+
+  <div class="result">
+    <div class="card" id="resultCard">
+      <div class="placeholder" id="placeholder">Your result will appear here.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const files = { person: null, garment: null };
+
+  function bindDrop(field) {
+    const drop = document.getElementById(field + "Drop");
+    const input = document.getElementById(field);
+
+    function setFile(file) {
+      if (!file || !file.type.startsWith("image/")) return;
+      files[field] = file;
+      drop.classList.add("filled");
+      let img = drop.querySelector("img");
+      if (!img) { img = document.createElement("img"); drop.appendChild(img); }
+      img.src = URL.createObjectURL(file);
+    }
+
+    input.addEventListener("change", () => { if (input.files[0]) setFile(input.files[0]); });
+    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("drag"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("drag"));
+    drop.addEventListener("drop", (e) => {
+      e.preventDefault(); drop.classList.remove("drag");
+      if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+    });
+  }
+
+  document.querySelectorAll(".clear").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const field = btn.dataset.for;
+      files[field] = null;
+      const drop = document.getElementById(field + "Drop");
+      drop.classList.remove("filled");
+      const img = drop.querySelector("img");
+      if (img) img.remove();
+      document.getElementById(field).value = "";
+    });
+  });
+
+  bindDrop("person");
+  bindDrop("garment");
+
+  // Backend health badge.
+  fetch("/healthz").then(r => r.json().then(j => ({ ok: r.ok, j }))).then(({ ok, j }) => {
+    const dot = document.getElementById("statusDot");
+    const txt = document.getElementById("statusText");
+    if (ok) { dot.className = "dot ok"; txt.textContent = "backend ready"; }
+    else { dot.className = "dot bad"; txt.textContent = j.status || "backend not ready"; }
+  }).catch(() => {
+    document.getElementById("statusDot").className = "dot bad";
+    document.getElementById("statusText").textContent = "backend unreachable";
+  });
+
+  const go = document.getElementById("go");
+  const elapsed = document.getElementById("elapsed");
+  const resultCard = document.getElementById("resultCard");
+  let timer = null, lastURL = null;
+
+  function showResult(html) { resultCard.innerHTML = ""; resultCard.append(html); }
+
+  go.addEventListener("click", async () => {
+    if (!files.person || !files.garment) {
+      resultCard.innerHTML = '<div class="err">Please add both a photo of yourself and a garment.</div>';
+      return;
+    }
+
+    const fd = new FormData();
+    fd.append("person", files.person);
+    fd.append("garment", files.garment);
+    const prompt = document.getElementById("prompt").value.trim();
+    const negative = document.getElementById("negative").value.trim();
+    if (prompt) fd.append("prompt", prompt);
+    if (negative) fd.append("negative", negative);
+
+    go.disabled = true;
+    resultCard.innerHTML = '<div class="placeholder"><span class="spinner"></span><div style="margin-top:12px">Generating… this can take a few minutes.</div></div>';
+    const started = Date.now();
+    elapsed.textContent = "0s";
+    timer = setInterval(() => { elapsed.textContent = Math.round((Date.now() - started) / 1000) + "s"; }, 1000);
+
+    try {
+      const resp = await fetch("/tryon", { method: "POST", body: fd });
+      if (!resp.ok) {
+        let msg = "Request failed (" + resp.status + ")";
+        try { const j = await resp.json(); if (j.error) msg = j.error; } catch (_) {}
+        resultCard.innerHTML = '<div class="err">' + msg.replace(/</g, "&lt;") + "</div>";
+        return;
+      }
+      const blob = await resp.blob();
+      if (lastURL) URL.revokeObjectURL(lastURL);
+      lastURL = URL.createObjectURL(blob);
+
+      const img = document.createElement("img");
+      img.src = lastURL;
+      const bar = document.createElement("div");
+      bar.className = "bar";
+      const took = document.createElement("span");
+      took.className = "elapsed";
+      took.textContent = "Done in " + Math.round((Date.now() - started) / 1000) + "s";
+      const dl = document.createElement("a");
+      dl.className = "download"; dl.href = lastURL; dl.download = "tryon.png"; dl.textContent = "Download ↓";
+      bar.append(took, dl);
+      showResult(img); resultCard.append(bar);
+    } catch (e) {
+      resultCard.innerHTML = '<div class="err">' + String(e).replace(/</g, "&lt;") + "</div>";
+    } finally {
+      go.disabled = false;
+      clearInterval(timer);
+      elapsed.textContent = "";
+    }
+  });
+})();
+</script>
+</body>
+</html>
