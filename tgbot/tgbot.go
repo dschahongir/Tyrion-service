@@ -32,11 +32,13 @@ import (
 	"tryon-service/workflow"
 )
 
-const helpText = "Привет! Я примеряю одежду на фото.\n\n" +
+const helpText = "Привет! Я меняю одежду на фото. Два способа:\n\n" +
 	"1. Пришли фото ЧЕЛОВЕКА (лучше в полный рост).\n" +
-	"2. Затем пришли фото ОДЕЖДЫ. К фото одежды можно добавить подпись — " +
-	"она будет использована как промпт.\n\n" +
-	"Генерация занимает до нескольких минут. /reset — начать заново."
+	"2. Дальше на выбор:\n" +
+	"   • пришли ФОТО ОДЕЖДЫ — надену именно её (к фото можно добавить подпись-уточнение);\n" +
+	"   • или напиши ТЕКСТОМ, что сделать — например «надень синее вечернее платье» " +
+	"или «полностью поменяй одежду на спортивный костюм».\n\n" +
+	"Генерация занимает пару минут. /reset — начать заново."
 
 // Bot — один Telegram-бот, завязанный на общий ComfyUI/workflow.
 type Bot struct {
@@ -45,9 +47,10 @@ type Bot struct {
 	fileAPI string // https://api.telegram.org/file/bot<token>
 	http    *http.Client
 
-	comfy   *comfyclient.Client
-	tpl     *workflow.Template
-	timeout time.Duration
+	comfy      *comfyclient.Client
+	tplGarment *workflow.Template // примерка по фото одежды (2 изображения)
+	tplPrompt  *workflow.Template // примерка по тексту (1 изображение)
+	timeout    time.Duration
 
 	mu      sync.Mutex
 	pending map[int64]*pendingPhoto // chatID -> уже присланное фото человека
@@ -62,17 +65,18 @@ type pendingPhoto struct {
 // New создаёт бота. token — из BotFather. comfy/tpl/timeout переиспользуются
 // те же, что у веб-сервиса (оба клиента потокобезопасны для конкурентного
 // использования).
-func New(token string, comfy *comfyclient.Client, tpl *workflow.Template, timeout time.Duration) *Bot {
+func New(token string, comfy *comfyclient.Client, tplGarment, tplPrompt *workflow.Template, timeout time.Duration) *Bot {
 	return &Bot{
 		token:   token,
 		api:     "https://api.telegram.org/bot" + token,
 		fileAPI: "https://api.telegram.org/file/bot" + token,
 		// Timeout клиента должен быть заметно больше long-poll таймаута getUpdates.
-		http:    &http.Client{Timeout: 50 * time.Second},
-		comfy:   comfy,
-		tpl:     tpl,
-		timeout: timeout,
-		pending: make(map[int64]*pendingPhoto),
+		http:       &http.Client{Timeout: 50 * time.Second},
+		comfy:      comfy,
+		tplGarment: tplGarment,
+		tplPrompt:  tplPrompt,
+		timeout:    timeout,
+		pending:    make(map[int64]*pendingPhoto),
 	}
 }
 
@@ -131,48 +135,74 @@ func (b *Bot) handleUpdate(parent context.Context, u update) {
 		return
 	}
 
-	fileID, baseName, ok := pickImage(msg)
-	if !ok {
+	fileID, baseName, hasImg := pickImage(msg)
+	text := strings.TrimSpace(msg.Text)
+
+	// Ни картинки, ни текста (стикер, голосовое и т.п.) — просто подсказка.
+	if !hasImg && text == "" {
 		b.send(parent, chatID, helpText)
 		return
 	}
 
-	// Скачиваем файл из Telegram.
-	dlCtx, cancel := context.WithTimeout(parent, 60*time.Second)
-	data, filePath, err := b.downloadFile(dlCtx, fileID)
-	cancel()
-	if err != nil {
-		b.send(parent, chatID, "Не смог скачать фото: "+err.Error())
+	// Пришла картинка: либо это фото человека (первое), либо фото одежды (второе).
+	if hasImg {
+		dlCtx, cancel := context.WithTimeout(parent, 60*time.Second)
+		data, filePath, err := b.downloadFile(dlCtx, fileID)
+		cancel()
+		if err != nil {
+			b.send(parent, chatID, "Не смог скачать фото: "+err.Error())
+			return
+		}
+		ext := imageExt(filePath, baseName)
+
+		b.mu.Lock()
+		person := b.pending[chatID]
+		if person == nil {
+			// Первое фото — человек. Ждём либо фото одежды, либо текст.
+			b.pending[chatID] = &pendingPhoto{data: data, ext: ext}
+			b.mu.Unlock()
+			b.send(parent, chatID, "Принял фото человека. Теперь пришли ФОТО ОДЕЖДЫ "+
+				"— либо напиши ТЕКСТОМ, что сделать (напр. «надень синее вечернее платье»).")
+			return
+		}
+		// Второе — одежда. Примерка по двум фото; подпись становится уточнением.
+		delete(b.pending, chatID)
+		b.mu.Unlock()
+		b.generate(parent, chatID, b.tplGarment, pipeline.Input{
+			PersonName:  "person" + person.ext,
+			PersonData:  person.data,
+			GarmentName: "garment" + ext,
+			GarmentData: data,
+			Prompt:      strings.TrimSpace(msg.Caption),
+		})
 		return
 	}
-	ext := imageExt(filePath, baseName)
 
-	// Первое фото в чате — это человек; ждём второе (одежду).
+	// Пришёл текст (не команда): это инструкция для примерки по фото человека.
 	b.mu.Lock()
 	person := b.pending[chatID]
 	if person == nil {
-		b.pending[chatID] = &pendingPhoto{data: data, ext: ext}
 		b.mu.Unlock()
-		b.send(parent, chatID, "Принял фото человека. Теперь пришли фото одежды (можно с подписью-промптом).")
+		b.send(parent, chatID, helpText) // сперва нужно фото человека
 		return
 	}
 	delete(b.pending, chatID)
 	b.mu.Unlock()
-
-	// Второе фото — одежда. Подпись к нему, если есть, становится промптом.
-	prompt := strings.TrimSpace(msg.Caption)
-	b.action(parent, chatID, "upload_photo")
-	b.send(parent, chatID, "Генерирую примерку, это может занять несколько минут…")
-
-	genCtx, cancel2 := context.WithTimeout(parent, b.timeout)
-	defer cancel2()
-	image, err := pipeline.Run(genCtx, b.comfy, b.tpl, pipeline.Input{
-		PersonName:  "person" + person.ext,
-		PersonData:  person.data,
-		GarmentName: "garment" + ext,
-		GarmentData: data,
-		Prompt:      prompt,
+	b.generate(parent, chatID, b.tplPrompt, pipeline.Input{
+		PersonName: "person" + person.ext,
+		PersonData: person.data,
+		Prompt:     text,
 	})
+}
+
+// generate прогоняет готовый вход через ComfyUI и отправляет результат в чат.
+func (b *Bot) generate(parent context.Context, chatID int64, tpl *workflow.Template, in pipeline.Input) {
+	b.action(parent, chatID, "upload_photo")
+	b.send(parent, chatID, "Генерирую, это может занять пару минут…")
+
+	ctx, cancel := context.WithTimeout(parent, b.timeout)
+	defer cancel()
+	image, err := pipeline.Run(ctx, b.comfy, tpl, in)
 	if err != nil {
 		b.send(parent, chatID, "Не получилось сгенерировать: "+err.Error())
 		return

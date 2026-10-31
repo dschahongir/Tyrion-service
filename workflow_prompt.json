@@ -1,0 +1,115 @@
+{
+  "1": {
+    "class_type": "UnetLoaderGGUF",
+    "inputs": {
+      "unet_name": "Qwen-Image-Edit-2509-Q4_K_M.gguf"
+    },
+    "_meta": { "title": "Load Diffusion Model" }
+  },
+  "14": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": ["1", 0],
+      "lora_name": "Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors",
+      "strength_model": 1.0
+    },
+    "_meta": { "title": "Lightning 4-step LoRA" }
+  },
+  "2": {
+    "class_type": "ModelSamplingAuraFlow",
+    "inputs": {
+      "model": ["14", 0],
+      "shift": 3.0
+    },
+    "_meta": { "title": "Model Sampling" }
+  },
+  "3": {
+    "class_type": "CLIPLoaderGGUF",
+    "inputs": {
+      "clip_name": "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf",
+      "type": "qwen_image"
+    },
+    "_meta": { "title": "Load Text Encoder" }
+  },
+  "4": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "_meta": { "title": "Load VAE" }
+  },
+  "5": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "person.png"
+    },
+    "_meta": { "title": "Person Image" }
+  },
+  "7": {
+    "class_type": "FluxKontextImageScale",
+    "inputs": {
+      "image": ["5", 0]
+    },
+    "_meta": { "title": "Scale Person" }
+  },
+  "8": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": ["7", 0],
+      "vae": ["4", 0]
+    },
+    "_meta": { "title": "Encode Latent" }
+  },
+  "9": {
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "inputs": {
+      "clip": ["3", 0],
+      "vae": ["4", 0],
+      "image1": ["7", 0],
+      "prompt": "Change the clothing worn by the person as described. Keep the person's face, pose, body shape and background identical."
+    },
+    "_meta": { "title": "Prompt" }
+  },
+  "10": {
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "inputs": {
+      "clip": ["3", 0],
+      "vae": ["4", 0],
+      "image1": ["7", 0],
+      "prompt": ""
+    },
+    "_meta": { "title": "Negative Prompt" }
+  },
+  "11": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["2", 0],
+      "seed": 0,
+      "steps": 4,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "positive": ["9", 0],
+      "negative": ["10", 0],
+      "latent_image": ["8", 0],
+      "denoise": 1.0
+    },
+    "_meta": { "title": "KSampler" }
+  },
+  "12": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["11", 0],
+      "vae": ["4", 0]
+    },
+    "_meta": { "title": "Decode" }
+  },
+  "13": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["12", 0],
+      "filename_prefix": "tryon"
+    },
+    "_meta": { "title": "Save" }
+  }
+}

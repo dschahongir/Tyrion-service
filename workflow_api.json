@@ -10,10 +10,10 @@
     "class_type": "LoraLoaderModelOnly",
     "inputs": {
       "model": ["1", 0],
-      "lora_name": "Qwen-Image-Edit-Lightning-8steps-V1.0-bf16.safetensors",
+      "lora_name": "Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors",
       "strength_model": 1.0
     },
-    "_meta": { "title": "Lightning 8-step LoRA" }
+    "_meta": { "title": "Lightning 4-step LoRA" }
   },
   "2": {
     "class_type": "ModelSamplingAuraFlow",
@@ -94,7 +94,7 @@
     "inputs": {
       "model": ["2", 0],
       "seed": 0,
-      "steps": 8,
+      "steps": 4,
       "cfg": 1.0,
       "sampler_name": "euler",
       "scheduler": "simple",

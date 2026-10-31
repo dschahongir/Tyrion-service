@@ -61,7 +61,9 @@ func Load(path string) (*Template, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, title := range []string{TitlePersonImage, TitleGarmentImage, TitlePrompt, TitleSampler} {
+	// Garment Image НЕ обязателен: воркфлоу примерки по тексту (без фото одежды)
+	// его не содержит. Его наличие проверяется при SetImage во время запроса.
+	for _, title := range []string{TitlePersonImage, TitlePrompt, TitleSampler} {
 		if _, err := inst.nodeByTitle(title); err != nil {
 			return nil, fmt.Errorf("в workflow нет обязательной ноды: %w", err)
 		}

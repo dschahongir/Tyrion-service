@@ -5,9 +5,10 @@
 //
 // Флаги:
 //
-//	--comfy-url     базовый URL ComfyUI (по умолч. http://127.0.0.1:8188)
-//	--workflow      путь к workflow_api.json (обязателен)
-//	--addr          адрес прослушивания (по умолч. :8080)
+//	--comfy-url        базовый URL ComfyUI (по умолч. http://127.0.0.1:8188)
+//	--workflow         workflow примерки по фото одежды (по умолч. workflow_api.json)
+//	--workflow-prompt  workflow примерки по тексту (по умолч. workflow_prompt.json)
+//	--addr             адрес прослушивания (по умолч. :8080)
 //	--timeout-min   потолок на одну генерацию в минутах (env TRYON_TIMEOUT_MIN)
 //	--tg-token      токен Telegram-бота (env TRYON_TG_TOKEN); пусто — бот выключен
 package main
@@ -31,7 +32,8 @@ import (
 func main() {
 	var (
 		comfyURL     = flag.String("comfy-url", "http://127.0.0.1:8188", "базовый URL ComfyUI")
-		workflowPath = flag.String("workflow", "workflow_api.json", "путь к экспортированному workflow_api.json")
+		workflowPath = flag.String("workflow", "workflow_api.json", "путь к workflow примерки по фото одежды")
+		promptPath   = flag.String("workflow-prompt", "workflow_prompt.json", "путь к workflow примерки по тексту (без фото одежды)")
 		addr         = flag.String("addr", ":8080", "адрес прослушивания HTTP API")
 		timeoutMin   = flag.Int("timeout-min", envIntDefault("TRYON_TIMEOUT_MIN", 4), "потолок на одну генерацию, минут")
 		tgToken      = flag.String("tg-token", os.Getenv("TRYON_TG_TOKEN"), "токен Telegram-бота (пусто — бот выключен)")
@@ -43,6 +45,16 @@ func main() {
 		log.Fatalf("загрузка workflow: %v", err)
 	}
 	log.Printf("workflow загружен: %s", *workflowPath)
+
+	// Второй граф — для примерки по тексту (нужен боту). Если файла нет, текстовый
+	// режим просто выключается, а примерка по фото одежды продолжает работать.
+	tplPrompt, err := workflow.Load(*promptPath)
+	if err != nil {
+		log.Printf("предупреждение: workflow-prompt не загружен (%v) — текстовый режим выключен", err)
+		tplPrompt = tpl
+	} else {
+		log.Printf("workflow-prompt загружен: %s", *promptPath)
+	}
 
 	timeout := time.Duration(*timeoutMin) * time.Minute
 	// Per-request таймаут HTTP-клиента к ComfyUI держим равным общему потолку:
@@ -72,7 +84,7 @@ func main() {
 	// Telegram-бот — опциональный второй вход в тот же pipeline. Запускаем в
 	// фоне рядом с HTTP-сервером; без токена просто не поднимаем.
 	if *tgToken != "" {
-		bot := tgbot.New(*tgToken, comfy, tpl, timeout)
+		bot := tgbot.New(*tgToken, comfy, tpl, tplPrompt, timeout)
 		go func() {
 			log.Printf("telegram-бот запущен (long-polling)")
 			if err := bot.Run(context.Background()); err != nil {

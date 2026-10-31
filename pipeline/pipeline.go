@@ -25,6 +25,10 @@ const DefaultPrompt = "Replace the clothing worn by the person in image 1 with t
 
 // Input — всё, что нужно для одной примерки. Name'ы должны иметь осмысленное
 // расширение (.png/.jpg/...), по нему ComfyUI понимает, что это изображение.
+//
+// GarmentData опционален: если он пуст, примерка идёт «по тексту» — редактирование
+// фото человека только по промпту, без второго изображения. В этом случае tpl
+// должен быть графом без ноды Garment Image.
 type Input struct {
 	PersonName  string
 	PersonData  []byte
@@ -49,17 +53,11 @@ func Run(ctx context.Context, comfy *comfyclient.Client, tpl *workflow.Template,
 	// параллельных запроса залили бы одинаковые person.png/garment.png и
 	// перетёрли входы друг другу. Токен разводит имена по запросам.
 	token := requestToken()
-	personName := token + "-" + in.PersonName
-	garmentName := token + "-" + in.GarmentName
 
-	// 1. Заливаем оба фото во входную папку ComfyUI.
-	person, err := comfy.UploadImage(ctx, personName, in.PersonData)
+	// 1. Заливаем фото человека (всегда) и фото одежды (если прислано).
+	person, err := comfy.UploadImage(ctx, token+"-"+in.PersonName, in.PersonData)
 	if err != nil {
 		return nil, fmt.Errorf("upload person: %w", err)
-	}
-	garment, err := comfy.UploadImage(ctx, garmentName, in.GarmentData)
-	if err != nil {
-		return nil, fmt.Errorf("upload garment: %w", err)
 	}
 
 	// 2. Свежая копия графа + подстановка значений по Title.
@@ -70,8 +68,14 @@ func Run(ctx context.Context, comfy *comfyclient.Client, tpl *workflow.Template,
 	if err := inst.SetImage(workflow.TitlePersonImage, person.Ref()); err != nil {
 		return nil, err
 	}
-	if err := inst.SetImage(workflow.TitleGarmentImage, garment.Ref()); err != nil {
-		return nil, err
+	if len(in.GarmentData) > 0 {
+		garment, err := comfy.UploadImage(ctx, token+"-"+in.GarmentName, in.GarmentData)
+		if err != nil {
+			return nil, fmt.Errorf("upload garment: %w", err)
+		}
+		if err := inst.SetImage(workflow.TitleGarmentImage, garment.Ref()); err != nil {
+			return nil, err
+		}
 	}
 	if err := inst.SetText(workflow.TitlePrompt, prompt); err != nil {
 		return nil, err
