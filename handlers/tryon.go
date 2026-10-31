@@ -1,11 +1,12 @@
 // Package handlers — Gin-хендлеры tryon-service.
 //
 // Единственная содержательная ручка — POST /tryon: принимает multipart с фото
-// человека и фото вещи, прогоняет их через ComfyUI по шаблону workflow и
-// отдаёт готовую картинку примерки.
+// человека и фото вещи, прогоняет их через ComfyUI (пакет pipeline) и отдаёт
+// готовую картинку примерки.
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -17,20 +18,15 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"tryon-service/comfyclient"
+	"tryon-service/pipeline"
 	"tryon-service/workflow"
 )
-
-// DefaultPrompt используется, если клиент не прислал свой промпт.
-const DefaultPrompt = "Replace the clothing worn by the person in image 1 with the " +
-	"garment shown in image 2. Keep the person's face, pose, body shape and " +
-	"background identical."
 
 // TryOn держит зависимости хендлера.
 type TryOn struct {
 	Comfy    *comfyclient.Client
 	Workflow *workflow.Template
 	// Timeout — потолок на всю генерацию (upload + очередь + сэмплинг + скачивание).
-	// На M3/16GB реально 1.5-4 минуты, поэтому дефолт крупный (см. --timeout-min).
 	Timeout time.Duration
 }
 
@@ -68,60 +64,21 @@ func (h *TryOn) handle(c *gin.Context) {
 		return
 	}
 
-	prompt := strings.TrimSpace(c.PostForm("prompt"))
-	if prompt == "" {
-		prompt = DefaultPrompt
-	}
-	negative := strings.TrimSpace(c.PostForm("negative"))
-
-	// 1. Заливаем оба фото во входную папку ComfyUI.
-	person, err := h.Comfy.UploadImage(ctx, personName, personData)
+	image, err := pipeline.Run(ctx, h.Comfy, h.Workflow, pipeline.Input{
+		PersonName:  personName,
+		PersonData:  personData,
+		GarmentName: garmentName,
+		GarmentData: garmentData,
+		Prompt:      c.PostForm("prompt"),
+		Negative:    c.PostForm("negative"),
+	})
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("upload person: %v", err)})
-		return
-	}
-	garment, err := h.Comfy.UploadImage(ctx, garmentName, garmentData)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("upload garment: %v", err)})
-		return
-	}
-
-	// 2. Свежая копия графа + подстановка значений по Title.
-	inst, err := h.Workflow.Instance()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if err := inst.SetImage(workflow.TitlePersonImage, person.Ref()); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if err := inst.SetImage(workflow.TitleGarmentImage, garment.Ref()); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if err := inst.SetText(workflow.TitlePrompt, prompt); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	// Негатив опционален: если в графе нет ноды Negative Prompt — просто пропускаем.
-	if negative != "" {
-		inst.TrySetText(workflow.TitleNegative, negative)
-	}
-	if err := inst.RandomizeSeed(workflow.TitleSampler); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	// 3. Ставим в очередь и ждём картинку.
-	promptID, err := h.Comfy.Queue(ctx, inst.Graph())
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("queue prompt: %v", err)})
-		return
-	}
-	image, err := h.Comfy.WaitImage(ctx, promptID)
-	if err != nil {
-		c.JSON(http.StatusGatewayTimeout, gin.H{"error": fmt.Sprintf("wait result: %v", err)})
+		// Истёкший дедлайн — это 504, остальное — проблема апстрима (ComfyUI) → 502.
+		status := http.StatusBadGateway
+		if ctx.Err() == context.DeadlineExceeded {
+			status = http.StatusGatewayTimeout
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 

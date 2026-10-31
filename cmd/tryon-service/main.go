@@ -9,6 +9,7 @@
 //	--workflow      путь к workflow_api.json (обязателен)
 //	--addr          адрес прослушивания (по умолч. :8080)
 //	--timeout-min   потолок на одну генерацию в минутах (env TRYON_TIMEOUT_MIN)
+//	--tg-token      токен Telegram-бота (env TRYON_TG_TOKEN); пусто — бот выключен
 package main
 
 import (
@@ -23,6 +24,7 @@ import (
 
 	"tryon-service/comfyclient"
 	"tryon-service/handlers"
+	"tryon-service/tgbot"
 	"tryon-service/workflow"
 )
 
@@ -32,6 +34,7 @@ func main() {
 		workflowPath = flag.String("workflow", "workflow_api.json", "путь к экспортированному workflow_api.json")
 		addr         = flag.String("addr", ":8080", "адрес прослушивания HTTP API")
 		timeoutMin   = flag.Int("timeout-min", envIntDefault("TRYON_TIMEOUT_MIN", 4), "потолок на одну генерацию, минут")
+		tgToken      = flag.String("tg-token", os.Getenv("TRYON_TG_TOKEN"), "токен Telegram-бота (пусто — бот выключен)")
 	)
 	flag.Parse()
 
@@ -65,6 +68,20 @@ func main() {
 
 	h := &handlers.TryOn{Comfy: comfy, Workflow: tpl, Timeout: timeout}
 	h.Register(r)
+
+	// Telegram-бот — опциональный второй вход в тот же pipeline. Запускаем в
+	// фоне рядом с HTTP-сервером; без токена просто не поднимаем.
+	if *tgToken != "" {
+		bot := tgbot.New(*tgToken, comfy, tpl, timeout)
+		go func() {
+			log.Printf("telegram-бот запущен (long-polling)")
+			if err := bot.Run(context.Background()); err != nil {
+				log.Printf("telegram-бот остановлен: %v", err)
+			}
+		}()
+	} else {
+		log.Printf("telegram-бот выключен (нет --tg-token / TRYON_TG_TOKEN)")
+	}
 
 	log.Printf("tryon-service слушает %s (timeout %v)", *addr, timeout)
 	if err := r.Run(*addr); err != nil {
